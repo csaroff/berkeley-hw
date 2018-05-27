@@ -15,34 +15,23 @@ import numpy as np
 import tf_util
 import gym
 import load_policy
+import argparse
 
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('expert_policy_file', type=str)
-    parser.add_argument('envname', type=str)
-    parser.add_argument('--render', action='store_true')
-    parser.add_argument("--max_timesteps", type=int)
-    parser.add_argument('--num_rollouts', type=int, default=20,
-                        help='Number of expert roll outs')
-    args = parser.parse_args()
-
-    print('loading and building expert policy')
-    policy_fn = load_policy.load_policy(args.expert_policy_file)
-    print('loaded and built')
+def sample_with_policy(policy_fn, envname, render, max_timesteps, num_rollouts):
 
     with tf.Session():
         tf_util.initialize()
 
         import gym
-        env = gym.make(args.envname)
-        max_steps = args.max_timesteps or env.spec.timestep_limit
+        env = gym.make(envname)
+        max_steps = max_timesteps or env.spec.timestep_limit
 
         returns = []
         observations = []
         actions = []
-        for i in range(args.num_rollouts):
-            print('iter', i)
+
+        for i in range(num_rollouts):
+            print('Running rollout ', i)
             obs = env.reset()
             done = False
             totalr = 0.
@@ -54,7 +43,7 @@ def main():
                 obs, r, done, _ = env.step(action)
                 totalr += r
                 steps += 1
-                if args.render:
+                if render:
                     env.render()
                 if steps % 100 == 0: print("%i/%i"%(steps, max_steps))
                 if steps >= max_steps:
@@ -65,8 +54,4 @@ def main():
         print('mean return', np.mean(returns))
         print('std of return', np.std(returns))
 
-        expert_data = {'observations': np.array(observations),
-                       'actions': np.array(actions)}
-
-if __name__ == '__main__':
-    main()
+        return np.array(np.squeeze(observations)), np.array(np.squeeze(actions)), np.array(np.squeeze(returns))
