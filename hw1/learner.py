@@ -103,34 +103,78 @@ def get_bc_model(ctx, use_cached_model=False, use_cached_examples=False):
 
     return model
 
-if __name__ == '__main__':
+def generate_policies(args):
+    # Generate policies
+    model = get_bc_model(args)
+
+    for i in range(args.num_rollouts):
+
+        learned_policy = lambda example: model.predict(example)
+
+        # dagger
+        obs, acts, returns = sample_with_policy(
+            policy_fn=learned_policy,
+            expert_policy_fn=expert_policy_fn,
+            envname=args.envname,
+            render=False,
+            max_timesteps=args.max_timesteps,
+            num_rollouts=1)
+
+        # update model
+        args.model = model
+        args.algo = 'dagger'
+        args.run = i
+        train_model(args, obs, acts)
+
+        model.save('models/' + args.envname + '_DG_' + str(args.num_rollouts) + '.h5py')
+
+def main():
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
         args = parse()
 
+        # generate_policices(args)
+
         print('Loading and building policy ...')
         expert_policy_fn = load_policy.load_policy('experts/' + args.envname + '.pkl')
 
-        model = get_bc_model(args)
+        bc_model = load_model('models/' + args.envname + '_BC_' + str(args.num_rollouts) + '.h5py')
+        bc_policy_fn = lambda example: bc_model.predict(example)
 
-        for i in range(args.num_rollouts):
+        dagger_model = load_model('models/' + args.envname + '_DG_' + str(args.num_rollouts) + '.h5py')
+        dagger_policy_fn = lambda example: dagger_model.predict(example)
 
-            learned_policy = lambda example: model.predict(example)
+        # Run the expert policy
+        o, a, expert_returns = sample_with_policy(
+            policy_fn=expert_policy_fn,
+            expert_policy_fn=None,
+            envname=args.envname,
+            render=args.render,
+            max_timesteps=args.max_timesteps,
+            num_rollouts=args.num_rollouts)
 
-            # dagger
-            obs, acts, returns = sample_with_policy(
-                policy_fn=learned_policy,
-                expert_policy_fn=expert_policy_fn,
-                envname=args.envname,
-                render=False,
-                max_timesteps=args.max_timesteps,
-                num_rollouts=1)
+        # Run the bc policy
+        o, a, bc_returns = sample_with_policy(
+            policy_fn=bc_policy_fn,
+            expert_policy_fn=None,
+            envname=args.envname,
+            render=args.render,
+            max_timesteps=args.max_timesteps,
+            num_rollouts=args.num_rollouts)
 
-            # update model
-            args.model = model
-            args.algo = 'dagger'
-            args.run = i
-            train_model(args, obs, acts)
+        o, a, dagger_returns = sample_with_policy(
+            policy_fn=dagger_policy_fn,
+            expert_policy_fn=None,
+            envname=args.envname,
+            render=args.render,
+            max_timesteps=args.max_timesteps,
+            num_rollouts=args.num_rollouts)
 
-            model.save('models/' + args.envname + '_DG_' + str(args.num_rollouts) + '.h5py')
+        print('expert return for env', args.envname, ' ', np.sum(expert_returns))
+        print('bc return for env', args.envname, ' ', np.sum(bc_returns))
+        print('dagger return for env', args.envname, ' ', np.sum(dagger_returns))
+
+
+if __name__ == '__main__':
+    main()
