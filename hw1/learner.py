@@ -51,16 +51,16 @@ def simple_nn(obs_size, act_size):
     model.compile(loss='mean_squared_error', optimizer='adam', metrics=['accuracy'])
     return model
 
-def train_model(model, obs_data, act_data):
-    tensorboard = TensorBoard(log_dir='./graph', histogram_freq=0, write_graph=True, write_images=False)
+def train_model(ctx, obs_data, act_data):
+    tensorboard = TensorBoard(log_dir='./tensorboard/' + ctx.algo + '_experiments/' + ctx.envname + '/' + str(ctx.run))
 
     obs_train, obs_test, act_train, act_test = train_test_split(
         obs_data, act_data, test_size=0.2, shuffle=False)
-    model.fit(obs_train, act_train, batch_size=128, epochs=40, verbose=1, callbacks=[tensorboard])
+    ctx.model.fit(obs_train, act_train, batch_size=128, epochs=40, verbose=1, callbacks=[tensorboard])
 
-    print('test loss', model.evaluate(obs_test, act_test, verbose=1))
-    model.evaluate(obs_test, act_test, verbose=1)
-    return model
+    print('test loss', ctx.model.evaluate(obs_test, act_test, verbose=1))
+    ctx.model.evaluate(obs_test, act_test, verbose=1)
+    return ctx.model
 
 def get_bc_model(ctx, use_cached_model=False, use_cached_examples=False):
     if(use_cached_model):
@@ -90,10 +90,13 @@ def get_bc_model(ctx, use_cached_model=False, use_cached_examples=False):
         save_pkl(obs_data, act_data, ctx.envname, ctx.num_rollouts)
 
     else:
-        obs_data, act_data = load_pkl(ctx.envname, ctx.num_rollouts)
+        obs_data, act_data, r_data = load_pkl(ctx.envname, ctx.num_rollouts)
 
 
-    model = train_model(model, obs_data, act_data)
+    ctx.model = model
+    ctx.algo = 'bc'
+    ctx.run = 1
+    model = train_model(ctx, obs_data, act_data)
 
     print('Cacheing model')
     model.save('models/' + ctx.envname + '_BC_' + str(ctx.num_rollouts) + '.h5py')
@@ -109,7 +112,7 @@ if __name__ == '__main__':
         print('Loading and building policy ...')
         expert_policy_fn = load_policy.load_policy('experts/' + args.envname + '.pkl')
 
-        model = get_bc_model(args) 
+        model = get_bc_model(args)
 
         for i in range(args.num_rollouts):
 
@@ -120,9 +123,14 @@ if __name__ == '__main__':
                 policy_fn=learned_policy,
                 expert_policy_fn=expert_policy_fn,
                 envname=args.envname,
-                render=args.render,
+                render=False,
                 max_timesteps=args.max_timesteps,
                 num_rollouts=1)
 
             # update model
-            train_model(model, obs, acts)
+            args.model = model
+            args.algo = 'dagger'
+            args.run = i
+            train_model(args, obs, acts)
+
+            model.save('models/' + args.envname + '_DG_' + str(args.num_rollouts) + '.h5py')
