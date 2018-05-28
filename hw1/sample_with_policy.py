@@ -17,10 +17,7 @@ import gym
 import load_policy
 import argparse
 
-def sample_with_policy(policy_fn, envname, render, max_timesteps, num_rollouts):
-
-    with tf.Session():
-        tf_util.initialize()
+def sample_with_policy(policy_fn, expert_policy_fn, envname, render, max_timesteps, num_rollouts):
 
         import gym
         env = gym.make(envname)
@@ -39,7 +36,11 @@ def sample_with_policy(policy_fn, envname, render, max_timesteps, num_rollouts):
             while not done:
                 action = policy_fn(obs[None,:])
                 observations.append(obs)
-                actions.append(action)
+                if expert_policy_fn:
+                    expert_action = expert_policy_fn(obs[None,:])
+                    actions.append(expert_action)
+                else:
+                    actions.append(action)
                 obs, r, done, _ = env.step(action)
                 totalr += r
                 steps += 1
