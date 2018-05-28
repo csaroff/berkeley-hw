@@ -1,4 +1,4 @@
-Results for 100 rollouts with no max_timesteps
+Sum of returns for 100 rollouts with no max_timesteps
 
 
 |                    | Hopper-v2    | Ant-v2       | HalfCheetah-v2 | Humanoid-v2   | Walker2d-v2  | Walker2d-v2  |
