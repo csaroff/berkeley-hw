@@ -7,6 +7,9 @@ import keras
 from keras.models import Sequential, load_model
 from keras.layers import Dense, Dropout, LSTM
 from keras.callbacks import TensorBoard
+from keras.optimizers import Adam
+from keras import backend as K
+from tensorflow.python.client import timeline
 
 from baselines.deepq.replay_buffer import ReplayBuffer
 
@@ -14,6 +17,9 @@ from math import inf
 from timeit import default_timer as timer
 
 import random
+
+run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+run_metadata = tf.RunMetadata()
 
 # Neural network for Q(s,a) -> r
 # Q is typically considered as having two inputs, the state and actions, and
@@ -31,16 +37,52 @@ import random
 # where r[i] represents the reward for taking action i in the state s. There is
 # obvious difficulty extending this approach to any infinite action space, but
 # we will refrain from addressing this here.
-def simple_nn(obs_shape, num_actions):
+def simple_nn(obs_shape, num_actions, lr=5e-4):
     print('Creating model with observation shape', obs_shape)
     print('Creating model with ', num_actions, 'actions')
     model = Sequential()
     print('input_shape', obs_shape)
-    model.add(Dense(8, activation='relu', input_shape=obs_shape))
-    model.add(Dense(8, activation='relu'))
+    model.add(Dense(128, activation='relu', input_shape=obs_shape))
+    model.add(Dense(128, activation='relu'))
     model.add(Dense(num_actions, activation='linear'))
-    model.compile(loss=tf.losses.huber_loss, optimizer='adam', metrics=['accuracy'])
+    model.compile(loss='MSE', optimizer='Adam', options=run_options, run_metadata=run_metadata)
+    # model.compile(loss=tf.losses.huber_loss, optimizer='adam', metrics=['accuracy'])
+    # model.compile(loss=huber_loss, optimizer=Adam(lr=lr), metrics=['accuracy'])
     return model
+
+# # Only stop the gradients for
+# # https://stackoverflow.com/a/43368518/6051733
+# def entry_stop_gradient(target, mask):
+#     mask_h = tf.abs(mask-1)
+#     return K.stop_gradient(mask_h * target) + mask * target
+#
+# def huber_loss(y_true, y_pred):
+#
+#     delta = 1.0
+#
+#     # y_true only gives the reward for the action taken
+#     # y_pred gives the reward for every possible action
+#     # massage y_pred so as to only compare the action taken
+#
+#     act_one_hot = y_true / K.reshape(K.sum(y_true, axis=1), [-1, 1])
+#     y_pred = y_pred * act_one_hot
+#     y_pred = entry_stop_gradient(y_pred, act_one_hot)
+#     y_pred = tf.Print(y_pred, [y_pred], summarize=10000)
+#     y_true = K.stop_gradient(y_true)
+#
+#     # x = y_true - y_pred
+#     # x = K.print_tensor(x, 'x = ')
+#
+#     return K.mean(K.square(y_pred - y_true), axis=-1)
+#     # return K.tf.where(
+#     #     K.tf.abs(x) < delta,
+#     #     K.tf.square(x) * 0.5,
+#     #     delta * (tf.abs(x) - 0.5 * delta))
+#
+#     # quadratic_part = K.clip(error, 0.0, 1.0)
+#     # linear_part = error - quadratic_part
+#     # loss = K.mean(0.5 * K.square(quadratic_part) + linear_part)
+#     # return loss
 
 # fit target_model using model as the predictor for future rewards
 def fit_batch(model, target_model, num_acts, gamma, batch, tensorboard):
@@ -50,47 +92,60 @@ def fit_batch(model, target_model, num_acts, gamma, batch, tensorboard):
     # And take the outcome for the best action
     predict_q_tp1_time = timer()
     q_tp1 = model.predict(new_obs)
-    print('predict_q_tp1_time', timer() - predict_q_tp1_time)
+    # print('predict_q_tp1_time', timer() - predict_q_tp1_time)
 
     q_tp1_best_time = timer()
-    q_tp1_bests = tf.reduce_max(q_tp1, 1)
-    print('predict best q_tp1 time', timer() - q_tp1_best_time)
+    q_tp1_bests = np.amax(q_tp1, axis=1)
+    # print('predict best q_tp1 time', timer() - q_tp1_best_time)
 
     # If is_done, there is no expected future reward because our current episode
     # is finished.  This should "ground" the model since this is the only fully
     # correct(non-estimated) q value.
     eoe_reward_time = timer()
     q_tp1_bests = (1.0 - is_dones) * q_tp1_bests
-    print('end of episode reward time', timer() - eoe_reward_time)
+    # print('end of episode reward time', timer() - eoe_reward_time)
 
     # Add actual current reward to expected future reward to generate the
     # targets for the training examples
     agg_reward_time = timer()
     q_t_bests = rewards + gamma * q_tp1_bests
-    print('aggregate reward time', timer() - agg_reward_time)
-
-    # Compute an additional forward pass to estimate the q values for the
-    # actions that were not taken in order to avoid computing the error manually
-    pred_q_t_time = timer()
-    q_targets = model.predict(obs)
-    print('predict q(t)', timer() - pred_q_t_time)
+    # print('aggregate reward time', timer() - agg_reward_time)
 
     # Replace predicted reward with observed reward
     q_t_replace_time = timer()
-    q_targets = q_targets * tf.one_hot(acts, num_acts, on_value=0.0, off_value=1.0)
-    q_targets = q_targets + tf.reshape(q_t_bests, [-1, 1]) * tf.one_hot(acts, num_acts, on_value=1.0, off_value=0.0)
-    print('Replace pred reward with obs reward time', timer() - q_t_replace_time)
+    # q_targets = tf.reshape(q_t_bests, [-1, 1]) * tf.one_hot(acts, num_acts)
+    q_targets = model.predict_on_batch(obs)
+    # q_targets = tf.scatter_nd_update(q_targets, acts, q_t_bests)
+    for i in range(num_acts):
+        # print('q_targets[i]', q_targets[i])
+        # print('acts[i]', acts[i])
+        # print('q_targets[i][acts[i]]', q_targets[i][acts[i]])
+        # print('q_t_bests[i]', q_t_bests[i])
+        q_targets[i][acts[i]] = q_t_bests[i]
+    q_targets = tf.Print(q_targets, [q_targets], summarize=10000)
+    # print('Replace pred reward with obs reward time', timer() - q_t_replace_time)
 
     # Fit the model using training examples
     fit_model_time = timer()
-    model.fit(obs, q_targets, epochs=1, steps_per_epoch=1, verbose=True, callbacks=[tensorboard])
-    print('Model fit time', timer() - fit_model_time)
+    # Use stop_gradients in order to prevent backprop through our targets
+    model.fit(obs, q_targets, epochs=1, steps_per_epoch=1, verbose=False, callbacks=[tensorboard])
+    # print('Model fit time', timer() - fit_model_time)
+
 
 def clone_model(model):
-    clone = keras.models.clone_model(model)
-    clone.set_weights(model.get_weights())
-    clone.compile(loss=tf.losses.huber_loss, optimizer='adam', metrics=['accuracy'])
-    return clone
+    """Returns a copy of a keras model."""
+    model.save('tmp_model')
+    return keras.models.load_model('tmp_model')
+
+# def clone_model(model, lr=5e-4):
+#     clone = keras.models.clone_model(model)
+#     clone.set_weights(model.get_weights())
+#     model.compile(loss=tf.losses.huber_loss, optimizer='adam', metrics=['accuracy'])
+#     # model.compile(loss='MSE', optimizer='Adam', options=run_options, run_metadata=run_metadata)
+#     # clone.compile(loss=tf.losses.huber_loss, optimizer=Adam(lr=lr), metrics=['accuracy'])
+#     return clone
+
+
 
 # Gameplan
 # ===
@@ -102,7 +157,7 @@ def clone_model(model):
 # 3. Sample from the replay buffer to improve our new policy.
 # 4. Periodically rotate the new policy in as the current policy
 def learn(envname,
-          learning_rate=5e-4,
+          lr=5e-4,
           max_timesteps=100000,
           buffer_size=100000,
           epsilon_decay=0.999,
@@ -196,6 +251,12 @@ def learn(envname,
 
             if episode_render_freq != None and num_episodes % episode_render_freq == 0:
                 env.render()
+
+            print('metadata step stats', run_metadata)
+            trace = timeline.Timeline(step_stats=run_metadata.step_stats)
+            with open('timeline.ctf.json', 'w') as f:
+                print('Step stats for tf timeline', trace.generate_chrome_trace_format())
+                f.write(trace.generate_chrome_trace_format())
 
 def main():
     # with tf.Session() as sess:
