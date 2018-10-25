@@ -58,7 +58,7 @@ Unfortunately, I failed to graph the 100 episode reward over time, but I did man
 ![50 million frames gif](gifs/BreakoutDeterministic-v4-50M.gif)  
 
 *The agent after 50 million frames of training.  Note that the agent was hardcoded to press the "next life"
-button.  Since we always ended the episode after one life, it never learned to take that action.*
+button during test time.  Since we always ended the episode after one life, it never learned to take that action.*
 
 ![100 million frames gif](gifs/BreakoutDeterministic-v4-100M.gif)  
 
