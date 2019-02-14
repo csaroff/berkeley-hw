@@ -1,41 +1,30 @@
-# Imports and initializations
 import sys
-import time
 import gym
-from gym.spaces import Discrete, Box
-
-import numpy as np
-np.set_printoptions(threshold=np.nan)
+import keras
+import random
 import tensorflow as tf
-from tensorflow.python.client import timeline
-
+import numpy as np
+from gym.spaces import Box
 from skimage.color import rgb2gray
 from skimage.transform import resize
-
-import keras
-from keras.models import Model, Sequential, load_model
-from keras.layers import Dense, Dropout, Input, LSTM, Lambda, Flatten, Reshape
+from keras.models import Model, load_model
+from keras.layers import Dense, Input, Lambda, Flatten, Reshape
 from keras.layers.convolutional import Convolution2D
-from keras.callbacks import TensorBoard
-from keras.optimizers import Adam, RMSprop
+from keras.optimizers import RMSprop
 from keras import backend as K
-K.set_image_dim_ordering('th')
+from baselines.deepq.replay_buffer import ReplayBuffer
+from math import inf
+from array2gif import write_gif
 
+np.set_printoptions(threshold=np.nan)
+K.set_image_dim_ordering('th')
 config = tf.ConfigProto()
 config.gpu_options.per_process_gpu_memory_fraction = 0.34
 keras.backend.tensorflow_backend.set_session(tf.Session(config=config))
-
-from baselines.deepq.replay_buffer import ReplayBuffer
-import baselines.common.tf_util as U
-
-from math import inf
-import random
-
-from array2gif import write_gif
-
-run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE, report_tensor_allocations_upon_oom=True)
+run_options = tf.RunOptions(
+    trace_level=tf.RunOptions.FULL_TRACE,
+    report_tensor_allocations_upon_oom=True)
 run_metadata = tf.RunMetadata()
-
 PREPROC_OBS_SHAPE = (84, 84)
 
 def write_log(writer, names, logs, batch_no):
@@ -78,7 +67,7 @@ def q_nn(obs_space, num_actions, obs_hist_len):
         # AUGMENTED_OBS_SHAPE = (obs_hist_len, obs_shape[0] // 2, obs_shape[1] // 2)
         AUGMENTED_OBS_SHAPE = (4,) + (PREPROC_OBS_SHAPE)
         # 4, 105, 80
-        obs_input = Input(AUGMENTED_OBS_SHAPE, name='observations');
+        obs_input = Input(AUGMENTED_OBS_SHAPE, name='observations')
         # Normalize 0-255 to 0-1
         normalized = Lambda(lambda x: x / 255.0)(obs_input)
         conv_1 = Convolution2D(32, 8, 8, subsample=(4, 4), activation='relu')(normalized)
@@ -91,7 +80,6 @@ def q_nn(obs_space, num_actions, obs_hist_len):
         obs_input = Input(input_shape, name='1dim-inputs')
         hidden = Reshape((-1,), input_shape=input_shape)(obs_input)
         hidden = Dense(128, activation='relu')(hidden)
-        # hidden = Dense(128, input_shape=(obs_hist_len, obs_shape[0]), activation='relu')(obs_input)
     else:
         raise NotImplementedError('Unknown observation space')
 
@@ -105,9 +93,12 @@ def q_nn(obs_space, num_actions, obs_hist_len):
 
     # Define q as a neural net and compile it
     model = Model(input=[obs_input, actions_input], output=filtered_output)
-    model.compile(RMSprop(lr=0.00025, rho=0.95, epsilon=0.01), loss=huber_loss, metrics=['accuracy'], options=run_options, run_metadata=run_metadata)
-    # model.compile(RMSprop(lr=0.00025, rho=0.95, epsilon=0.01), loss='logcosh', metrics=['accuracy'], options=run_options, run_metadata=run_metadata)
-    # model.compile(loss=tf.losses.huber_loss, optimizer='adam', metrics=['accuracy'], options=run_options, run_metadata=run_metadata)
+    model.compile(
+        RMSprop(lr=0.00025, rho=0.95, epsilon=0.01),
+        loss=huber_loss,
+        metrics=['accuracy'],
+        options=run_options,
+        run_metadata=run_metadata)
     return model
 
 def to_grayscale(img):
@@ -123,13 +114,11 @@ def fit_batch(model, target_model, num_actions, discount_factor, batch, tensorbo
     (obs, acts, rewards, new_obs, is_done) = batch
     obs = np.array(obs)
     new_obs = np.array(new_obs)
-    # np.one_hot(acts, num_actions)
     acts = np.eye(num_actions)[acts]
 
     # Predict the value of the q function in the next state for each action
     # And take the outcome for the best action
     q_tp1 = target_model.predict_on_batch([new_obs, np.ones(acts.shape)])
-
     q_tp1_best = np.amax(q_tp1, axis=1)
 
     # If is_done, there is no expected future reward because our current episode
@@ -147,17 +136,12 @@ def fit_batch(model, target_model, num_actions, discount_factor, batch, tensorbo
     if batch_no % 10 == 0:
         logs = model.test_on_batch([obs, acts], q_true)
         write_log(tensorboard, ['val_loss', 'val_mae'], logs, batch_no // 10)
-    # model.fit([obs, acts], q_true, batch_size=32, verbose=0, callbacks=[tensorboard])
 
 def clone_model(model):
     """Returns a copy of a keras model."""
-    # # Must checkpoint model to avoid OOM https://github.com/keras-team/keras/issues/5345
-    # clone = Model.from_config(model.get_config())
-    # clone.set_weights(model.get_weights())
-    # clone.compile(loss=tf.losses.huber_loss, optimizer='adam', metrics=['accuracy'], options=run_options, run_metadata=run_metadata)
-    # return clone
+    # Must checkpoint model to avoid OOM https://github.com/keras-team/keras/issues/5345
     model.save('tmp_model')
-    return load_model('tmp_model', custom_objects={'huber_loss':huber_loss})
+    return load_model('tmp_model', custom_objects={'huber_loss': huber_loss})
 
 # Gameplan
 # ===
@@ -176,8 +160,8 @@ def learn(env,
           agent_history_length=4,
           target_network_update_freq=10000,
           discount_factor=0.99,
-          # "action repeat" handled by gym environment(equivalent to frame skip)
-          train_freq=4, # agent "update frequency" in human level control paper
+          # "action_repeat=4" handled by gym environment(equivalent to frame skip)
+          train_freq=4,  # agent "update frequency" in human level control paper
           initial_exploration_rate=1,
           final_exploration_rate=0.1,
           final_exploration_frame=1000000,
@@ -188,101 +172,100 @@ def learn(env,
           log_dir='./tensorboard',
           start_from_checkpoint=False):
 
-        tensorboard = TensorBoard(log_dir=log_dir + '/' + env.spec.id)
-        writer = tf.summary.FileWriter(log_dir + '/' + env.spec.id)
+    writer = tf.summary.FileWriter(log_dir + '/' + env.spec.id)
 
-        # Linear decay as used in the deepmind paper
-        epsilon = lambda t: max(initial_exploration_rate - (t/final_exploration_frame), final_exploration_rate)
-        # epsilon = lambda t: max(epsilon_decay ** t, epsilon_minimum)
+    # Linear decay as used in the deepmind paper
+    epsilon = lambda t: max(initial_exploration_rate - (t/final_exploration_frame), final_exploration_rate)
 
-        preprocess = _preprocess if len(env.observation_space.shape) == 3 else lambda x: x
+    preprocess = _preprocess if len(env.observation_space.shape) == 3 else lambda x: x
 
-        replay_buffer = ReplayBuffer(buffer_size)
-        num_actions = env.action_space.n
+    replay_buffer = ReplayBuffer(buffer_size)
+    num_actions = env.action_space.n
 
-        # Here, we'll use a simple feed forward nn for representing
-        # Q(s) -> [r_1, r_2, ..., r_n] where r_k is the reward for taking action
-        # `k` in state `s`
-        if start_from_checkpoint:
-            model = load_model('tmp_model', custom_objects={'huber_loss':huber_loss})
+    # Here, we'll use a simple feed forward nn for representing
+    # Q(s) -> [r_1, r_2, ..., r_n] where r_k is the reward for taking action
+    # `k` in state `s`
+    if start_from_checkpoint:
+        model = load_model('tmp_model', custom_objects={'huber_loss': huber_loss})
+    else:
+        model = q_nn(env.observation_space, num_actions, agent_history_length)
+    target_model = clone_model(model)
+
+    # Keep some state about the current episode
+    num_episodes = 0
+    episode_total_reward = 0
+    episode_timesteps = 0
+    episode_rewards = [0.0]
+
+    last_checkpoint_mean_reward = -inf
+    mean_100ep_reward = -inf
+
+    # Start off with a fresh environment
+    ob = preprocess(env.reset())
+    obs = [ob for i in range(agent_history_length)]
+
+    # Play breakout for max_timesteps
+    for t in range(max_timesteps):
+        # With probability epsilon, take a random action
+        if(random.uniform(0, 1) < epsilon(t)):
+            action = env.action_space.sample()
         else:
-            model = q_nn(env.observation_space, num_actions, agent_history_length)
-        target_model = clone_model(model)
+            observations = np.array([obs])
+            actions = np.reshape(np.ones(num_actions), [1, -1])
+            q_values = model.predict_on_batch([observations, actions])
+            action = np.argmax(q_values, axis=1)[0]
 
-        # Keep some state about the current episode
-        num_episodes = 0
-        episode_total_reward = 0
-        episode_timesteps = 0
-        episode_rewards = [0.0]
+        # Collect observations and store them for replay
+        new_ob, reward, is_done, info = env.step(action)
+        is_done = info['ale.lives'] != 5
+        new_obs = list(obs)
+        new_obs.pop(0)
+        new_obs.append(preprocess(new_ob))
 
-        last_checkpoint_mean_reward = -inf
-        mean_100ep_reward = -inf
+        replay_buffer.add(obs, action, reward, new_obs, is_done)
+        obs = new_obs
 
-        # Start off with a fresh environment
-        ob = preprocess(env.reset())
-        obs = [ob for i in range(agent_history_length)]
+        # Update logging info
+        episode_total_reward += reward
+        episode_timesteps += 1
 
-        # Play breakout for max_timesteps
-        for t in range(max_timesteps):
-            # With probability epsilon, take a random action
-            if(random.uniform(0, 1) < epsilon(t)):
-                action = env.action_space.sample()
-            else:
-                observations = np.array([obs])
-                actions = np.reshape(np.ones(num_actions), [1,-1])
-                q_values = model.predict_on_batch([observations, actions])
-                action = np.argmax(q_values, axis=1)[0]
+        if t > replay_start_size and t % train_freq == 0:
+            fit_batch(model, target_model, num_actions, discount_factor,
+                      replay_buffer.sample(batch_size), writer, t // train_freq)
 
-            # Collect observations and store them for replay
-            new_ob, reward, is_done, info = env.step(action)
-            is_done = info['ale.lives'] != 5
-            new_obs = list(obs)
-            new_obs.pop(0)
-            new_obs.append(preprocess(new_ob))
+        if t > replay_start_size and t % target_network_update_freq == 0:
+            # Must checkpoint model and clear sess to avoid OOM https://github.com/keras-team/keras/issues/5345
+            model.save('tmp_model')
+            K.clear_session()
+            target_model = load_model('tmp_model', custom_objects={'huber_loss': huber_loss})
+            model = load_model('tmp_model', custom_objects={'huber_loss': huber_loss})
+            print('Setting model to target model')
 
-            replay_buffer.add(obs, action, reward, new_obs, is_done)
-            obs = new_obs
+        if is_done:
+            ob = preprocess(env.reset())
+            obs = np.array([ob for i in range(agent_history_length)])
+            episode_timesteps = 0
+            num_episodes += 1
+            episode_rewards.append(episode_total_reward)
+            episode_total_reward = 0
+            if len(episode_rewards) > 100:
+                episode_rewards.pop(0)
+            mean_100ep_reward = round(np.mean(episode_rewards[-101:-1]), 1)
 
-            # Update logging info
-            episode_total_reward += reward
-            episode_timesteps += 1
+        if is_done and num_episodes % print_freq == 0:
+            print("timesteps", t)
+            print("episodes run", num_episodes)
+            print("last episode reward", episode_rewards[-1])
+            print("mean_100ep_reward", mean_100ep_reward)
+            print("% time spent exploring", int(100 * epsilon(t)))
 
-            if t > replay_start_size and t % train_freq == 0:
-                fit_batch(model, target_model, num_actions, discount_factor, replay_buffer.sample(batch_size), writer, t // train_freq)
+        if t % checkpoint_freq == 0 and mean_100ep_reward > last_checkpoint_mean_reward:
+            print("Saving model due to mean reward increase: ", last_checkpoint_mean_reward, " -> ", mean_100ep_reward)
+            model.save('models/' + env.spec.id + '_deepq.h5py')
+            last_checkpoint_mean_reward = mean_100ep_reward
 
-            if t > replay_start_size and t % target_network_update_freq == 0:
-                # Must checkpoint model and clear sess to avoid OOM https://github.com/keras-team/keras/issues/5345
-                model.save('tmp_model')
-                K.clear_session()
-                target_model = load_model('tmp_model', custom_objects={'huber_loss':huber_loss})
-                model = load_model('tmp_model', custom_objects={'huber_loss':huber_loss})
-                print('Setting model to target model')
-
-            if is_done:
-                ob = preprocess(env.reset())
-                obs = np.array([ob for i in range(agent_history_length)])
-                episode_timesteps = 0
-                num_episodes += 1
-                episode_rewards.append(episode_total_reward)
-                episode_total_reward = 0
-                if len(episode_rewards) > 100:
-                    episode_rewards.pop(0)
-                mean_100ep_reward = round(np.mean(episode_rewards[-101:-1]), 1)
-
-            if is_done and num_episodes % print_freq == 0:
-                print("timesteps", t)
-                print("episodes run", num_episodes)
-                print("last episode reward", episode_rewards[-1])
-                print("mean_100ep_reward", mean_100ep_reward)
-                print("% time spent exploring", int(100 * epsilon(t)))
-
-            if t % checkpoint_freq == 0 and mean_100ep_reward > last_checkpoint_mean_reward:
-                print("Saving model due to mean reward increase: ", last_checkpoint_mean_reward, " -> ", mean_100ep_reward)
-                model.save('models/' + env.spec.id + '_deepq.h5py')
-                last_checkpoint_mean_reward = mean_100ep_reward
-
-            if episode_render_freq != None and num_episodes % episode_render_freq == 0:
-                env.render()
+        if episode_render_freq is not None and num_episodes % episode_render_freq == 0:
+            env.render()
 
 def play(env, model, agent_history_length=4):
     preprocess = _preprocess if len(env.observation_space.shape) == 3 else lambda x: x
@@ -296,7 +279,6 @@ def play(env, model, agent_history_length=4):
         ale_lives = 6
         while not done:
             timesteps += 1
-            # time.sleep(.02)
             # env.render()
 
             frames.append(env.render(mode='rgb_array'))
@@ -320,9 +302,8 @@ def play(env, model, agent_history_length=4):
 def main():
     env = gym.make('BreakoutDeterministic-v4')
     # learn(env)
-
-    # play(env, load_model('models/' + env.spec.id + '_deepq_50mil.h5py', custom_objects={'huber_loss':huber_loss}), agent_history_length=4)
-    play(env, load_model('models/' + env.spec.id + '_deepq.h5py', custom_objects={'huber_loss':huber_loss}), agent_history_length=4)
+    play(env, load_model('models/' + env.spec.id + '_deepq.h5py',
+         custom_objects={'huber_loss': huber_loss}), agent_history_length=4)
 
 
 if __name__ == '__main__':
